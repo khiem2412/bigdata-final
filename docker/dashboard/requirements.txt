@@ -1,0 +1,9 @@
+streamlit==1.33.0
+pandas==2.2.1
+plotly==5.20.0
+folium==0.16.0
+streamlit-folium==0.18.0
+deltalake==0.18.2
+s3fs==2024.3.1
+pyarrow==15.0.2
+python-dotenv==1.0.1
