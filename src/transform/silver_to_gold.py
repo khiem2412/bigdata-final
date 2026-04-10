@@ -299,6 +299,7 @@ def build_plot_summary(spark: SparkSession):
     log.info("--- Building Plot Summary ---")
 
     fhi = spark.read.format("delta").load(f"{GOLD_PATH}/forest_health_index")
+    feature_store = spark.read.format("delta").load(f"{GOLD_PATH}/feature_store")
 
     # Latest FHI per plot
     w_latest = Window.partitionBy("plot_id").orderBy(col("date").desc())
@@ -320,8 +321,13 @@ def build_plot_summary(spark: SparkSession):
             spark_round(spark_max("fhi"), 1).alias("max_fhi"),
             spark_sum(col("has_disease_flag").cast("int")).alias("total_disease_reports"),
             spark_sum(col("has_drought_flag").cast("int")).alias("total_drought_reports"),
-            spark_sum("anomaly_count_7d").alias("total_anomalies"),
         )
+    )
+
+    anomaly_stats = (
+        feature_store
+        .groupBy("plot_id")
+        .agg(spark_sum("anomaly_count").alias("total_anomalies"))
     )
 
     summary = (
@@ -333,6 +339,7 @@ def build_plot_summary(spark: SparkSession):
             "ndvi",
         )
         .join(stats, on="plot_id")
+        .join(anomaly_stats, on="plot_id")
     )
 
     summary.write.format("delta") \

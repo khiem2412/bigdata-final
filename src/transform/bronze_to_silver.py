@@ -34,7 +34,7 @@ def transform_sensor(spark: SparkSession):
     log.info("--- Transforming sensor data ---")
 
     df = spark.read.format("delta").load(f"{BRONZE_PATH}/sensor_stream")
-    log.info(f"  Read {df.count():,} sensor records from Bronze")
+    log.info("  Loaded sensor records from Bronze (detecting anomalies...)")
 
     # Basic cleaning
     clean = (
@@ -48,26 +48,25 @@ def transform_sensor(spark: SparkSession):
         .withColumn("date", to_date(col("timestamp")))
     )
 
-    # Compute rolling stats per sensor for anomaly detection
-    w = Window.partitionBy("sensor_id").orderBy("timestamp").rowsBetween(-288, 0)
-
-    with_stats = (
-        clean
-        .withColumn("temp_rolling_avg", avg("temperature").over(w))
-        .withColumn("temp_rolling_std", stddev("temperature").over(w))
-        .withColumn("sm_rolling_avg", avg("soil_moisture").over(w))
-        .withColumn("sm_rolling_std", stddev("soil_moisture").over(w))
+    # Compute global stats per sensor via aggregation (much faster than rolling window)
+    sensor_stats = clean.groupBy("sensor_id").agg(
+        avg("temperature").alias("temp_avg"),
+        stddev("temperature").alias("temp_std"),
+        avg("soil_moisture").alias("sm_avg"),
+        stddev("soil_moisture").alias("sm_std"),
     )
 
-    # Anomaly flags
+    # Join stats back and compute anomaly flags
+    with_stats = clean.join(sensor_stats, on="sensor_id", how="left")
+
     anomalies = (
         with_stats
         .withColumn(
             "is_temp_anomaly",
             when(col("temperature") > 40, True)
             .when(
-                spark_abs(col("temperature") - col("temp_rolling_avg"))
-                > 3 * col("temp_rolling_std"),
+                spark_abs(col("temperature") - col("temp_avg"))
+                > 3 * col("temp_std"),
                 True,
             )
             .otherwise(False),
@@ -76,8 +75,8 @@ def transform_sensor(spark: SparkSession):
             "is_moisture_anomaly",
             when(col("soil_moisture") < 0.10, True)
             .when(
-                spark_abs(col("soil_moisture") - col("sm_rolling_avg"))
-                > 3 * col("sm_rolling_std"),
+                spark_abs(col("soil_moisture") - col("sm_avg"))
+                > 3 * col("sm_std"),
                 True,
             )
             .otherwise(False),
@@ -86,6 +85,8 @@ def transform_sensor(spark: SparkSession):
             "is_anomaly",
             col("is_temp_anomaly") | col("is_moisture_anomaly"),
         )
+        .withColumnRenamed("temp_avg", "temp_rolling_avg")
+        .withColumnRenamed("sm_avg", "sm_rolling_avg")
     )
 
     # Select final columns
@@ -106,8 +107,10 @@ def transform_sensor(spark: SparkSession):
         .partitionBy("year_month") \
         .save(f"{SILVER_PATH}/sensor_clean")
 
-    count = silver_sensor.count()
-    anomaly_count = silver_sensor.filter(col("is_anomaly")).count()
+    # Read back from written Delta table to avoid recomputing
+    written = spark.read.format("delta").load(f"{SILVER_PATH}/sensor_clean")
+    count = written.count()
+    anomaly_count = written.filter(col("is_anomaly")).count()
     log.info(f"  Silver sensor: {count:,} rows, {anomaly_count:,} anomalies")
 
 

@@ -6,8 +6,8 @@ import logging
 import sys
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
-    from_json, col, to_timestamp, year, month, dayofmonth,
-    concat_ws, lpad, current_timestamp,
+    from_json, col, to_timestamp_ntz, year, month,
+    concat_ws, lpad,
 )
 from pyspark.sql.types import (
     StructType, StructField, StringType, DoubleType, TimestampType,
@@ -59,8 +59,7 @@ def main():
         .selectExpr("CAST(value AS STRING) as json_str")
         .select(from_json(col("json_str"), SENSOR_SCHEMA).alias("data"))
         .select("data.*")
-        .withColumn("timestamp", to_timestamp(col("timestamp")))
-        .withColumn("ingest_time", current_timestamp())
+        .withColumn("timestamp", to_timestamp_ntz(col("timestamp")))
         .withColumn(
             "year_month",
             concat_ws(

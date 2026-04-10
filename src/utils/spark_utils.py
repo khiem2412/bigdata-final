@@ -30,6 +30,9 @@ def get_spark_session(app_name: str = "ForestLakehouse") -> SparkSession:
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
         .config("spark.databricks.delta.schema.autoMerge.enabled", "true")
+        .config("spark.sql.execution.arrow.pyspark.enabled", "false")
+        .config("spark.memory.fraction", "0.7")
+        .config("spark.memory.storageFraction", "0.3")
         # Reduce logging noise
         .config("spark.ui.showConsoleProgress", "false")
         .getOrCreate()
