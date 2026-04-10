@@ -10,10 +10,11 @@ RUN apt-get update && \
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV PYSPARK_PYTHON=python3
 
-COPY docker/spark/requirements.txt /tmp/requirements.txt
+# Install Apache Airflow + all project dependencies
+COPY docker/airflow/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Download additional JARs for Delta Lake, S3/MinIO, and Kafka
+# Download Spark JARs for Delta Lake, S3/MinIO, and Kafka
 RUN SPARK_JARS=$(python3 -c "import pyspark; print(pyspark.__path__[0])")/jars && \
     echo "Downloading JARs to $SPARK_JARS" && \
     curl -sL -o $SPARK_JARS/delta-spark_2.12-3.1.0.jar \
@@ -36,5 +37,8 @@ RUN SPARK_JARS=$(python3 -c "import pyspark; print(pyspark.__path__[0])")/jars &
 
 ENV SPARK_HOME=/usr/local/lib/python3.11/site-packages/pyspark
 ENV PATH=$SPARK_HOME/bin:$SPARK_HOME/sbin:$PATH
+
+ENV AIRFLOW_HOME=/opt/airflow
+RUN mkdir -p $AIRFLOW_HOME/dags $AIRFLOW_HOME/logs $AIRFLOW_HOME/plugins
 
 WORKDIR /app

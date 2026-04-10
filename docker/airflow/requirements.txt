@@ -1,0 +1,11 @@
+apache-airflow[postgres]==2.9.3
+pyspark==3.5.1
+delta-spark==3.1.0
+pandas==2.2.1
+numpy==1.26.4
+pyarrow==15.0.2
+requests==2.31.0
+python-dotenv==1.0.1
+kafka-python-ng==2.2.2
+deltalake==0.18.2
+s3fs==2024.3.1

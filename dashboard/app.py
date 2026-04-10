@@ -28,6 +28,7 @@ st.markdown("""
 - **🗺️ Forest Map** — Bản đồ NDVI, anomaly overlay, time slider
 - **📊 Health Dashboard** — Forest Health Index, sensor time series, drill-down
 - **📦 Feature Store** — Query feature table, export CSV/Parquet
+- **🛰️ Satellite View** — Ảnh vệ tinh false-color, lưới 5×5, sensor overlay
 
 ---
 
@@ -53,7 +54,8 @@ st.markdown("""
 # Sidebar info
 st.sidebar.markdown("### System Info")
 st.sidebar.info(
-    "MinIO: http://localhost:9001\n\n"
-    "Kafka: localhost:9092\n\n"
-    "Dashboard: localhost:8501"
+    "MinIO Console: http://localhost:9001\n\n"
+    "Kafka UI: http://localhost:8080\n\n"
+    "Spark UI: http://localhost:4040 (during jobs)\n\n"
+    "Dashboard: http://localhost:8501"
 )

@@ -1,3 +1,14 @@
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./src:/app/src
+    - airflow-logs:/opt/airflow/logs
+  networks:
+    - lakehouse
+
 services:
   # ============================================
   # INFRASTRUCTURE SERVICES (always-on)
@@ -96,6 +107,96 @@ services:
     networks:
       - lakehouse
 
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: forest-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: forest-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      DYNAMIC_CONFIG_ENABLED: "true"
+    mem_limit: 384m
+    networks:
+      - lakehouse
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: forest-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - lakehouse
+    restart: unless-stopped
+
+  # ============================================
+  # SPARK CLUSTER
+  # ============================================
+
+  spark-master:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    container_name: forest-spark-master
+    hostname: spark-master
+    ports:
+      - "8082:8080"
+      - "7077:7077"
+    environment:
+      - SPARK_MODE=master
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    mem_limit: 512m
+    volumes:
+      - ./src:/app/src
+    networks:
+      - lakehouse
+    command: spark-class org.apache.spark.deploy.master.Master -h spark-master --port 7077 --webui-port 8080
+    restart: unless-stopped
+
+  spark-worker:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    container_name: forest-spark-worker
+    hostname: spark-worker
+    depends_on:
+      - spark-master
+    ports:
+      - "8081:8081"
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=1g
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    mem_limit: 1536m
+    volumes:
+      - ./src:/app/src
+    networks:
+      - lakehouse
+    command: spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077 --webui-port 8081
+    restart: unless-stopped
+
   # ============================================
   # APPLICATION SERVICES (on-demand)
   # ============================================
@@ -129,19 +230,24 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+      spark-master:
+        condition: service_started
     env_file: .env
+    ports:
+      - "4040:4040"
     environment:
       - MINIO_ENDPOINT=http://minio:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - KAFKA_BROKER=kafka:29092
+      - SPARK_MASTER_URL=spark://spark-master:7077
       - SPARK_DRIVER_MEMORY=1g
     mem_limit: 2g
     volumes:
       - ./src:/app/src
     networks:
       - lakehouse
-    command: echo "Use 'docker compose run --rm spark <command>' to execute Spark jobs"
+    command: echo "Use 'docker compose run --rm spark <command>' for ad-hoc Spark jobs"
 
   sensor-producer:
     build:
@@ -182,8 +288,85 @@ services:
       - lakehouse
     command: streamlit run /app/dashboard/app.py --server.port=8501 --server.address=0.0.0.0
 
+  # ============================================
+  # AIRFLOW ORCHESTRATION
+  # ============================================
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: forest-airflow-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    entrypoint: /bin/bash
+    command: >
+      -c "
+      airflow db migrate &&
+      airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@forest.local || true
+      "
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: forest-airflow-webserver
+    hostname: airflow-webserver
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8088:8080"
+    environment:
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__FERNET_KEY=ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg=
+      - AIRFLOW__WEBSERVER__SECRET_KEY=forest-lakehouse-secret
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_DRIVER_HOST=airflow-webserver
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - KAFKA_BROKER=kafka:29092
+      - PYTHONPATH=/app
+    mem_limit: 512m
+    command: airflow webserver --port 8080
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: forest-airflow-scheduler
+    hostname: airflow-scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      spark-master:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    environment:
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__FERNET_KEY=ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg=
+      - AIRFLOW__WEBSERVER__SECRET_KEY=forest-lakehouse-secret
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_DRIVER_HOST=airflow-scheduler
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - KAFKA_BROKER=kafka:29092
+      - PYTHONPATH=/app
+    mem_limit: 1g
+    command: airflow scheduler
+    restart: unless-stopped
+
 volumes:
   minio-data:
+  postgres-data:
+  airflow-logs:
 
 networks:
   lakehouse:

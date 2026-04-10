@@ -1,18 +1,24 @@
 """
 Spark session utilities for the Forest Lakehouse.
+Supports both local mode and Spark standalone cluster.
 """
+import os
+import socket
+
 from pyspark.sql import SparkSession
 from src.config import (
     MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY,
     SPARK_DRIVER_MEMORY, SPARK_CORES,
 )
 
+SPARK_MASTER_URL = os.getenv("SPARK_MASTER_URL", f"local[{SPARK_CORES}]")
+
 
 def get_spark_session(app_name: str = "ForestLakehouse") -> SparkSession:
-    return (
+    builder = (
         SparkSession.builder
         .appName(app_name)
-        .master(f"local[{SPARK_CORES}]")
+        .master(SPARK_MASTER_URL)
         # Delta Lake
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
@@ -23,7 +29,7 @@ def get_spark_session(app_name: str = "ForestLakehouse") -> SparkSession:
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
-        # Performance tuning for low-resource environment
+        # Performance tuning
         .config("spark.driver.memory", SPARK_DRIVER_MEMORY)
         .config("spark.sql.shuffle.partitions", "8")
         .config("spark.default.parallelism", "4")
@@ -35,5 +41,15 @@ def get_spark_session(app_name: str = "ForestLakehouse") -> SparkSession:
         .config("spark.memory.storageFraction", "0.3")
         # Reduce logging noise
         .config("spark.ui.showConsoleProgress", "false")
-        .getOrCreate()
     )
+
+    # Cluster mode: configure driver host for executor callback
+    if SPARK_MASTER_URL.startswith("spark://"):
+        driver_host = os.getenv("SPARK_DRIVER_HOST", socket.gethostname())
+        builder = (
+            builder
+            .config("spark.driver.host", driver_host)
+            .config("spark.driver.bindAddress", "0.0.0.0")
+        )
+
+    return builder.getOrCreate()

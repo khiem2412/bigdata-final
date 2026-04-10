@@ -152,8 +152,14 @@ with tab1:
         st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
-    m = folium.Map(location=FOREST_CENTER, zoom_start=18, tiles="OpenStreetMap")
+    # m = folium.Map(location=FOREST_CENTER, zoom_start=18, tiles="OpenStreetMap")
+    m = folium.Map(location=FOREST_CENTER, zoom_start=18)
 
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri",
+        name="Esri Satellite",
+    ).add_to(m)
     for _, row in ndvi_day.iterrows():
         ndvi_val = row["ndvi"]
         # Color: green (healthy) → red (stressed)
