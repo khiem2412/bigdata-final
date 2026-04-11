@@ -31,8 +31,21 @@ def load_data(table_path):
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300)
+def load_sensor_for_plot(plot_id):
+    """Load sensor data lazily — only for the selected plot (avoids loading 7M+ rows)."""
+    try:
+        dt = DeltaTable("s3://lakehouse/silver/sensor_clean", storage_options=STORAGE_OPTIONS)
+        df = dt.to_pandas(
+            filters=[("plot_id", "=", plot_id)],
+        )
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+
+
 fhi_df = load_data("gold/forest_health_index")
-sensor_df = load_data("silver/sensor_clean")
+feature_df = load_data("gold/feature_store")
 ndvi_df = load_data("silver/satellite_clean")
 ocr_df = load_data("silver/ocr_processed")
 image_df = load_data("silver/image_processed")
@@ -116,9 +129,9 @@ if not plot_fhi.empty:
 tab1, tab2, tab3 = st.tabs(["🌡️ Sensor Data", "🛰️ NDVI", "📝 Notes & Images"])
 
 with tab1:
-    if not sensor_df.empty:
-        sensor_df["date"] = pd.to_datetime(sensor_df["date"])
-        plot_sensors = sensor_df[sensor_df["plot_id"] == selected_plot].copy()
+    plot_sensors = load_sensor_for_plot(selected_plot)
+    if not plot_sensors.empty:
+        plot_sensors["date"] = pd.to_datetime(plot_sensors["date"])
 
         if len(date_range) == 2:
             plot_sensors = plot_sensors[

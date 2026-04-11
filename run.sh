@@ -101,10 +101,18 @@ wait_for_url() {
 }
 
 ensure_infra() {
-    if ! docker compose ps kafka 2>/dev/null | grep -q "running"; then
+    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q "forest-kafka"; then
         warn "Infrastructure not running. Starting..."
         cmd_start
     fi
+}
+
+# Check if data exists in a given layer (bronze/silver/gold)
+# Returns 0 if data exists, 1 if not
+data_exists() {
+    local layer=${1:-"bronze"}
+    docker compose run --rm -T app python -m src.check_data --layer "$layer" > /dev/null 2>&1
+    return $?
 }
 
 print_urls() {
@@ -237,9 +245,24 @@ cmd_health() {
 }
 
 cmd_generate() {
+    local force=false
+    if [[ "${1:-}" == "--force" ]]; then
+        force=true
+    fi
+
     header "GENERATE - Historical Data (1 Year)"
 
     ensure_infra
+
+    if ! $force && data_exists bronze; then
+        info "Bronze data already exists. Skipping generation."
+        info "Use './run.sh generate --force' to regenerate."
+        return 0
+    fi
+
+    if $force; then
+        warn "Force mode: regenerating all data..."
+    fi
 
     step "1/5" "Generating historical sensor data (~7.9M rows)..."
     docker compose run --rm app python -m src.generators.historical_data
@@ -260,9 +283,20 @@ cmd_generate() {
 }
 
 cmd_transform() {
+    local force=false
+    if [[ "${1:-}" == "--force" ]]; then
+        force=true
+    fi
+
     header "TRANSFORM - Bronze → Silver → Gold (Spark Cluster)"
 
     ensure_infra
+
+    if ! $force && data_exists gold; then
+        info "Gold data already exists. Skipping transformation."
+        info "Use './run.sh transform --force' to re-transform."
+        return 0
+    fi
 
     step "1/2" "Bronze → Silver transformation..."
     docker compose run --rm spark python -m src.transform.bronze_to_silver
@@ -332,10 +366,10 @@ cmd_demo() {
     step "2/5" "Starting all services..."
     cmd_start
 
-    step "3/5" "Generating historical data..."
+    step "3/5" "Generating historical data (skips if exists)..."
     cmd_generate
 
-    step "4/5" "Running transformations (Spark cluster)..."
+    step "4/5" "Running transformations (skips if exists)..."
     cmd_transform
 
     step "5/5" "Validating data..."
@@ -417,9 +451,11 @@ show_help() {
     echo "  logs <svc>    Follow logs for a service"
     echo ""
     echo -e "${BOLD}Pipeline:${NC}"
-    echo "  generate      Generate 1 year historical data"
+    echo "  generate      Generate 1 year historical data (skips if exists)"
+    echo "  generate --force  Force regenerate all data"
     echo "  pipeline      Trigger full pipeline via Airflow"
-    echo "  transform     Run Bronze → Silver → Gold (Spark cluster)"
+    echo "  transform     Run Bronze → Silver → Gold (skips if exists)"
+    echo "  transform --force  Force re-transform all data"
     echo "  stream        Start real-time streaming"
     echo "  stop-stream   Stop streaming pipeline"
     echo "  validate      Validate all data layers"

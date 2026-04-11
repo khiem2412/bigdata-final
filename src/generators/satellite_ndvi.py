@@ -108,6 +108,22 @@ def write_ndvi_to_bronze(df: pd.DataFrame):
 
 
 def main():
+    # Try fetching real Sentinel-2 data first
+    try:
+        from src.ingestion.satellite_ingest import fetch_historical, write_to_bronze
+
+        log.info("Attempting to fetch real Sentinel-2 NDVI from Planetary Computer...")
+        df = fetch_historical()
+        if not df.empty:
+            write_to_bronze(df, mode="overwrite")
+            log.info(f"Successfully ingested {len(df)} real satellite NDVI records")
+            return
+        log.warning("No real satellite data returned. Falling back to synthetic.")
+    except Exception as e:
+        log.warning(f"Real satellite fetch failed: {e}")
+        log.info("Falling back to synthetic NDVI generation...")
+
+    # Fallback: generate synthetic data
     df = generate_ndvi_series()
     write_ndvi_to_bronze(df)
 
